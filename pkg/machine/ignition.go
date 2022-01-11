@@ -1,3 +1,6 @@
+// go:build amd64 || arm64
+// go:build amd64 || arm64
+//go:build amd64 || arm64
 // +build amd64 arm64
 
 package machine
@@ -379,36 +382,70 @@ func getCerts(certsDir string) []File {
 		files []File
 	)
 
-	certs, err := ioutil.ReadDir(certsDir)
-	if err == nil {
-		for _, cert := range certs {
-			b, err := ioutil.ReadFile(filepath.Join(certsDir, cert.Name()))
-			if err != nil {
-				logrus.Warnf("Unable to read cert file %s", err.Error())
-				continue
-			}
-			files = append(files, File{
-				Node: Node{
-					Group: getNodeGrp("root"),
-					Path:  filepath.Join("/etc/containers/certs.d/", cert.Name()),
-					User:  getNodeUsr("root"),
-				},
-				FileEmbedded1: FileEmbedded1{
-					Append: nil,
-					Contents: Resource{
-						Source: encodeDataURLPtr(string(b)),
-					},
-					Mode: intToPtr(0644),
-				},
-			})
+	certs := listDirectory(certsDir)
+	logrus.Warn(certs)
+
+	for _, cert := range certs {
+		b, err := ioutil.ReadFile(cert)
+		if err != nil {
+			logrus.Warnf("Unable to read file %s", err.Error())
+			continue
 		}
-	} else {
-		if !os.IsNotExist(err) {
-			logrus.Warnf("Unable to copy certs via ignition, error while reading certs from %s:  %s", certsDir, err.Error())
+
+		certPath, err := filepath.Rel(certsDir, cert)
+		if err != nil {
+			logrus.Warnf("%s", err)
 		}
+
+		files = append(files, File{
+			Node: Node{
+				Group: getNodeGrp("root"),
+				Path:  filepath.Join("/etc/containers/certs.d/", certPath),
+				User:  getNodeUsr("root"),
+			},
+			FileEmbedded1: FileEmbedded1{
+				Append: nil,
+				Contents: Resource{
+					Source: encodeDataURLPtr(string(b)),
+				},
+				Mode: intToPtr(0644),
+			},
+		})
 	}
 
 	return files
+}
+
+func listDirectory(directoryPath string) []string {
+	var (
+		dirs []string
+	)
+
+	items, err := ioutil.ReadDir(directoryPath)
+	if err == nil {
+		for _, dir := range items {
+			path := filepath.Join(directoryPath, dir.Name())
+
+			fileInfo, err := os.Stat(path)
+			if err != nil {
+				logrus.Warnf("Cannot stat %s", path)
+				continue
+			}
+
+			if fileInfo.IsDir() {
+				nestedDirs := listDirectory(path)
+				dirs = append(dirs, nestedDirs...)
+			} else {
+				dirs = append(dirs, path)
+			}
+		}
+	} else {
+		if !os.IsNotExist(err) {
+			logrus.Warnf("Unable to copy certs via ignition, error while reading certs from %s:  %s", directoryPath, err.Error())
+		}
+	}
+
+	return dirs
 }
 
 func getLinks(usrName string) []Link {
